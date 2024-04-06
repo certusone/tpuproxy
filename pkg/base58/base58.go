@@ -187,7 +187,7 @@ func Encode32(out *[44]byte, in [32]byte) uint {
 	//   X = sum_i raw_base58[i] * 58^(RAW58_SZ-1-i)
 
 	var rawBase58 [raw32sz]byte
-	for i := 0; i < 9; i++ {
+	for i := 0; i < inter32sz; i++ {
 		// We know intermediate[ i ] < 58^5 < 2^32 for all i, so casting
 		// to a uint32 is safe.
 		v := uint32(intermediate[i])
@@ -385,8 +385,8 @@ func Decode32(out *[32]byte, encoded []byte) (ok bool) {
 
 	// Convert to the intermediate format
 	//   X = sum_i intermediate[i] * 58^(5*(INTERMEDIATE_SZ-1-i))
-	var intermediate [9]uint64
-	for i := 0; i < 9; i++ {
+	var intermediate [inter32sz]uint64
+	for i := 0; i < inter32sz; i++ {
 		intermediate[i] = uint64(rawBase58[5*i+0])*11316496 +
 			uint64(rawBase58[5*i+1])*195112 +
 			uint64(rawBase58[5*i+2])*3364 +
@@ -399,10 +399,10 @@ func Decode32(out *[32]byte, encoded []byte) (ok bool) {
 	//
 	// For N==32, the largest anything in binary can get is binary[7]:
 	// even if intermediate[i]==58^5-1 for all i, then binary[7] < 2^63.
-	var binary_ [8]uint64
-	for j := 0; j < 8; j++ {
+	var binary_ [bin32sz]uint64
+	for j := 0; j < bin32sz; j++ {
 		var acc uint64
-		for i := 0; i < 9; i++ {
+		for i := 0; i < inter32sz; i++ {
 			acc += uint64(intermediate[i]) * uint64(decTable32[i][j])
 		}
 		binary_[j] = acc
@@ -412,7 +412,7 @@ func Decode32(out *[32]byte, encoded []byte) (ok bool) {
 	//
 	// For N==32, we have plenty of headroom in binary, so overflow is
 	// not a concern this time.
-	for i := 7; i > 0; i-- {
+	for i := bin32sz - 1; i > 0; i-- {
 		binary_[i-1] += binary_[i] >> 32
 		binary_[i] &= 0xFFFFFFFF
 	}
@@ -425,7 +425,7 @@ func Decode32(out *[32]byte, encoded []byte) (ok bool) {
 	}
 
 	// Convert each term to big endian for the final output
-	for i := 0; i < 8; i++ {
+	for i := 0; i < bin32sz; i++ {
 		binary.BigEndian.PutUint32(out[4*i:], uint32(binary_[i]))
 	}
 
@@ -449,7 +449,97 @@ func Decode32(out *[32]byte, encoded []byte) (ok bool) {
 }
 
 func Decode64(out *[64]byte, encoded []byte) (ok bool) {
-	return false
+	// Check length
+	if len(encoded) < 64 || len(encoded) > 88 {
+		return false
+	}
+
+	// Validate string
+	for _, c := range encoded {
+		idx := int(c) - int(inverseLUTOffset)
+		if idx > int(inverseLUTSentinel) {
+			idx = int(inverseLUTSentinel)
+		}
+		if inverseLUT[idx] == invalidChar {
+			return false
+		}
+	}
+
+	// X = sum_i raw_base58[i] * 58^(RAW58_SZ-1-i)
+	var rawBase58 [raw64sz]byte
+
+	// Prepend enough 0s to make it exactly RAW58_SZ characters
+	prepend0 := raw64sz - len(encoded)
+	for j := 0; j < raw64sz; j++ {
+		if j >= int(prepend0) {
+			rawBase58[j] = inverseLUT[encoded[j-int(prepend0)]-inverseLUTOffset]
+		}
+	}
+
+	// Convert to the intermediate format
+	//   X = sum_i intermediate[i] * 58^(5*(INTERMEDIATE_SZ-1-i))
+	var intermediate [inter64sz]uint64
+	for i := 0; i < inter64sz; i++ {
+		intermediate[i] = uint64(rawBase58[5*i+0])*11316496 +
+			uint64(rawBase58[5*i+1])*195112 +
+			uint64(rawBase58[5*i+2])*3364 +
+			uint64(rawBase58[5*i+3])*58 +
+			uint64(rawBase58[5*i+4])
+	}
+
+	// Using the table, convert to overcomplete base 2^32 (terms can be
+	// larger than 2^32).  We need to be careful about overflow.
+	//
+	// For N==64, the largest anything in binary can get is binary[13]:
+	// even if intermediate[i]==58^5-1 for all i, then binary[13] <
+	// 2^63.998.  Hanging in there, just by a thread!
+	var binary_ [bin64sz]uint64
+	for j := 0; j < bin64sz; j++ {
+		var acc uint64
+		for i := 0; i < inter64sz; i++ {
+			acc += uint64(intermediate[i]) * uint64(decTable64[i][j])
+		}
+		binary_[j] = acc
+	}
+
+	// Make sure each term is less than 2^32.
+	//
+	// For N==64, even if we add 2^32 to binary[13], it is still 2^63.998,
+	// so this won't overflow.
+	for i := bin64sz - 1; i > 0; i-- {
+		binary_[i-1] += binary_[i] >> 32
+		binary_[i] &= 0xFFFFFFFF
+	}
+
+	// If the largest term is 2^32 or bigger, it means N is larger than
+	// what can fit in BYTE_CNT bytes.  This can be triggered, by passing
+	// a base58 string of all 'z's for example.
+	if binary_[0] > 0xFFFFFFFF {
+		return false
+	}
+
+	// Convert each term to big endian for the final output
+	for i := 0; i < bin64sz; i++ {
+		binary.BigEndian.PutUint32(out[4*i:], uint32(binary_[i]))
+	}
+
+	// Make sure the encoded version has the same number of leading '1's
+	// as the decoded version has leading 0s. The check doesn't read past
+	// the end of encoded, because '\0' != '1', so it will return NULL.
+	var leadingZeroCnt int
+	for leadingZeroCnt = 0; leadingZeroCnt < 64; leadingZeroCnt++ {
+		if out[leadingZeroCnt] != 0 {
+			break
+		}
+		if encoded[leadingZeroCnt] != '1' {
+			return false
+		}
+	}
+	if leadingZeroCnt < len(encoded) && encoded[leadingZeroCnt] == '1' {
+		return false
+	}
+
+	return true
 }
 
 func Encode(buf []byte) string {

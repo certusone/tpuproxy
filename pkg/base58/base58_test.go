@@ -101,6 +101,21 @@ func TestEncode64(t *testing.T) {
 	}
 }
 
+func TestDecode64(t *testing.T) {
+	for _, test := range testVector64 {
+		var out [64]byte
+		if !Decode64(&out, []byte(test.b58)) {
+			t.Errorf("Decode64(%s) failed", test.b58)
+			continue
+		}
+
+		outStr := hex.EncodeToString(out[:])
+		if outStr != test.hex {
+			t.Errorf("Decode64(%s) = %s, want %s", test.b58, outStr, test.hex)
+		}
+	}
+}
+
 func BenchmarkEncode32(b *testing.B) {
 	test := testVector32[0]
 	var in [32]byte
@@ -143,5 +158,20 @@ func BenchmarkEncode64(b *testing.B) {
 
 	for i := 0; i < b.N; i++ {
 		_ = Encode64(&out, in)
+	}
+}
+
+func BenchmarkDecode64(b *testing.B) {
+	test := testVector64[0]
+	var out [64]byte
+
+	b.ReportAllocs()
+	b.ResetTimer()
+
+	for i := 0; i < b.N; i++ {
+		if !Decode64(&out, []byte(test.b58)) {
+			b.Errorf("Decode64(%s) failed", test.b58)
+			continue
+		}
 	}
 }
