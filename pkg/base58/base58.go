@@ -21,13 +21,11 @@ const alphabet = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
 const (
 	// N = 32
 	inter32sz = 9 // Computed by ceil(log_(58^5) (256^32-1))
-	enc32sz   = 45
 	bin32sz   = 8 //  N / 4
 	raw32sz   = inter32sz * 5
 
 	// N = 64
 	inter64sz = 18 // Computed by ceil(log_(58^5) (256^64-1))
-	enc64sz   = 89
 	bin64sz   = 16 //  N / 4
 	raw64sz   = inter64sz * 5
 )
@@ -206,7 +204,7 @@ func Encode32(out *[44]byte, in [32]byte) uint {
 	// by skipping the first few leading zeros in rawBase58.
 
 	var rawLeading0s uint
-	for rawLeading0s = 0; rawLeading0s < enc32sz; rawLeading0s++ {
+	for rawLeading0s = 0; rawLeading0s < raw32sz; rawLeading0s++ {
 		if rawBase58[rawLeading0s] != 0 {
 			break
 		}
@@ -232,11 +230,11 @@ func Encode32(out *[44]byte, in [32]byte) uint {
 	// Regardless, rawLeading0s - inLeading0s >= 0.
 
 	skip := rawLeading0s - inLeading0s
-	for i := uint(0); i < enc32sz-skip; i++ {
+	for i := uint(0); i < raw32sz-skip; i++ {
 		out[i] = alphabet[rawBase58[i+skip]]
 	}
 
-	return enc32sz - skip
+	return raw32sz - skip
 }
 
 func Encode64(out *[88]byte, in [64]byte) uint {
